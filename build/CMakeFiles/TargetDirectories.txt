@@ -1,0 +1,3 @@
+/home/ciglervmbox/Documents/path_finder/build/CMakeFiles/algorithm.dir
+/home/ciglervmbox/Documents/path_finder/build/CMakeFiles/edit_cache.dir
+/home/ciglervmbox/Documents/path_finder/build/CMakeFiles/rebuild_cache.dir
