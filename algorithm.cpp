@@ -23,7 +23,7 @@ std::vector<pcl::PointXYZ> selected_points;
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr input_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
-void find_path(pcl::visualization::PCLVisualizer *viewer){
+void find_path(pcl::visualization::PCLVisualizer *viewer, double width){
 	//SHOW INPUT BOX FOR WIDTH INPUT
 	if(viewer->contains("Path")){
 		viewer->removePointCloud("Path");
@@ -33,6 +33,16 @@ void find_path(pcl::visualization::PCLVisualizer *viewer){
 	// viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "Path");
 
 }
+
+void prompt_width_input(pcl::visualization::PCLVisualizer *viewer){
+	double width;
+    std::cout << "Please enter the width value: ";
+    std::cin >> width;
+    std::cout << "You have entered width: " << width << std::endl;
+	find_path(viewer, width);
+}
+
+
 
 void pointPickingEventOccurred(const pcl::visualization::PointPickingEvent& event, void* viewer_void)
 {
@@ -75,8 +85,7 @@ void keyboardEventOccurred (const pcl::visualization::KeyboardEvent &event, void
 
 {
 
-  pcl::visualization::PCLVisualizer *viewer = static_cast<pcl::visualization::PCLVisualizer *> (viewer_void);
-
+  pcl::visualization::PCLVisualizer *viewer = static_cast<pcl::visualization::PCLVisualizer *> (viewer_void);	
   if (event.getKeySym () == "c" && event.keyDown ())
 
   {
@@ -84,11 +93,20 @@ void keyboardEventOccurred (const pcl::visualization::KeyboardEvent &event, void
     std::cout << "c was pressed => clearing all inputs" << std::endl;
 	selected_points.clear();
 	input_cloud->points.clear();
+	if(viewer->contains("Input Points")){
+		viewer->removePointCloud("Input Points");
+	}
     
 
-  }else if(event.getKeySym () == "g" && event.keyDown ()){
-    std::cout << "g was pressed => finding path" << std::endl;
-	find_path(viewer);
+  }else if(event.getKeySym () == "k" && event.keyDown ()){
+    std::cout << "k was pressed => finding path" << std::endl;
+	if(selected_points.size() > 2){
+		prompt_width_input(viewer);
+
+	}else{
+		std::cout << selected_points.size() << " points were selected" << std::endl;
+    	std::cout << "Please select 3 or more points" << std::endl;
+	}
   }
 
 }
@@ -115,6 +133,10 @@ pcl::visualization::PCLVisualizer::Ptr createView(pcl::PointCloud<pcl::PointXYZ>
   viewer->addCoordinateSystem (1.0);
 
   viewer->initCameraParameters ();
+
+  viewer->addText("Choose points to create the boundary by using 'shift + left-mouse-button'", 10, 60, "instruction1");
+  viewer->addText("Press 'c' to clear selected points", 10, 40, "instruction2");
+  viewer->addText("Press 'k' to confirm selected points and continue to width input", 10, 20, "instruction3");
 
   viewer->registerPointPickingCallback(pointPickingEventOccurred, (void*)viewer.get());
 
