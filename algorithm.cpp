@@ -4,7 +4,7 @@
 #include <pcl/surface/convex_hull.h>
 #include <pcl/filters/crop_hull.h>
 #include <thread>
-#include <pcl/common/angles.h> 
+#include <pcl/common/angles.h>
 #include <pcl/features/normal_3d.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/visualization/pcl_visualizer.h>
@@ -13,50 +13,216 @@
 #include <iostream>
 #include <random>
 #include <ctime>
+#include <Eigen/Dense>
 
 using namespace std;
 
 using namespace std::chrono_literals;
 
+std::vector<int> selectedPoints;
 
-std::vector<pcl::PointXYZ> selected_points;
-pcl::PointCloud<pcl::PointXYZRGB>::Ptr input_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+std::set<int> perimeter;
+std::vector<int> startLine;
+
+double stepSize;
+double width;
+
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr inputCloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
-void find_path(pcl::visualization::PCLVisualizer *viewer, double width){
-	//SHOW INPUT BOX FOR WIDTH INPUT
-	if(viewer->contains("Path")){
+pcl::PointCloud<pcl::Normal>::Ptr computeNormals(double searchRadius)
+{
+	pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> ne;
+
+	ne.setInputCloud(cloud);
+
+	pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>());
+
+	ne.setSearchMethod(tree);
+
+	pcl::PointCloud<pcl::Normal>::Ptr cloudNormals(new pcl::PointCloud<pcl::Normal>);
+
+	ne.setRadiusSearch(0.05);
+
+	ne.compute(*cloudNormals);
+
+	return cloudNormals;
+}
+Eigen::Vector3f projectVector(Eigen::Vector3f dirVector, pcl::Normal pointNormal)
+{
+	Eigen::Vector3f normalVector(pointNormal.normal_x, pointNormal.normal_y, pointNormal.normal_z);
+
+	return dirVector - (dirVector.dot(normalVector) / normalVector.dot(normalVector)) * normalVector;
+}
+double distEuc(pcl::PointXYZ pt1, pcl::PointXYZ pt2)
+{
+	return sqrt(
+		(pt1.x - pt2.x) * (pt1.x - pt2.x) +
+		(pt1.y - pt2.y) * (pt1.y - pt2.y) +
+		(pt1.z - pt2.z) * (pt1.z - pt2.z));
+}
+void calculateStepSize(int numMoves = 150)
+{
+	std::cout << "Calculating step size";
+	if (cloud->points.empty() || numMoves <= 0)
+	{
+		stepSize = 0;
+		return;
+	}
+
+	pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+	kdtree.setInputCloud(cloud);
+
+	pcl::PointXYZ currentPoint = cloud->points[0];
+	std::set<int> visited;
+	visited.insert(0);
+
+	double cumulativeStep = 0.0;
+
+	for (int move = 0; move < numMoves; ++move)
+	{
+		std::vector<int> nearestIndices(1);
+		std::vector<float> nearestDistances(1);
+
+		if (kdtree.nearestKSearch(currentPoint, 1, nearestIndices, nearestDistances) > 0)
+		{
+			int nearestIndex = nearestIndices[0];
+
+			while (visited.find(nearestIndex) != visited.end() && visited.size() < cloud->points.size())
+			{
+				currentPoint = cloud->points[nearestIndex];
+				kdtree.nearestKSearch(currentPoint, 1, nearestIndices, nearestDistances);
+				nearestIndex = nearestIndices[0];
+			}
+			if (visited.find(nearestIndex) == visited.end())
+			{
+				pcl::PointXYZ nearestPoint = cloud->points[nearestIndex];
+				double stepDistance = distEuc(nearestPoint, currentPoint);
+				cumulativeStep += stepDistance;
+				visited.insert(nearestIndex);
+				currentPoint = nearestPoint;
+			}
+			else
+			{
+				break;
+			}
+		}
+	}
+
+	stepSize = visited.size() > 1 ? cumulativeStep / double(visited.size() - 1) : 0;
+}
+
+vector<int> findNearest(pcl::PointXYZ searchPoint, int K = 1)
+{
+	std::vector<int> pointIdxKNNSearch(K);
+	std::vector<float> pointKNNSquaredDistance(K);
+	pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+	kdtree.setInputCloud(cloud);
+
+	if (kdtree.nearestKSearch(searchPoint, K, pointIdxKNNSearch, pointKNNSquaredDistance) > 0)
+	{
+		return pointIdxKNNSearch;
+	}
+	return std::vector<int>();
+};
+
+void findPerimeterLine(pcl::PointCloud<pcl::PointXYZRGB>::Ptr perimeterCloud,
+					   pcl::PointCloud<pcl::Normal>::Ptr normals,
+					   int index1,
+					   int index2)
+{
+	pcl::PointXYZRGB rgbPt;
+	pcl::PointXYZ pt1(cloud->points[index1]);
+	pcl::PointXYZ pt2(cloud->points[index2]);
+	while (distEuc(pt1, pt2) >= width)
+	{
+
+		Eigen::Vector3f direction(pt2.x - pt1.x, pt2.y - pt1.y, pt2.z - pt1.z);
+		Eigen::Vector3f projected = projectVector(direction, normals->points[index1]);
+		pt1.x += projected.x();
+		pt1.y += projected.y();
+		pt1.z += projected.z();
+		vector<int> newPtIdx = findNearest(pt1);
+		pt1 = cloud->points[newPtIdx[0]];
+		rgbPt.x = pt1.x;
+		rgbPt.y = pt1.y;
+		rgbPt.z = pt1.z;
+
+		rgbPt.r = 0;
+		rgbPt.g = 255;
+		rgbPt.b = 0;
+		perimeterCloud->points.push_back(rgbPt);
+	}
+}
+
+void createPerimeter(pcl::visualization::PCLVisualizer *viewer, pcl::PointCloud<pcl::Normal>::Ptr normals, double stepSize)
+
+{
+	std::cout << "Creating Perimeter";
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr perimeterCloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+	for (int i = 0; i < selectedPoints.size(); ++i)
+	{
+		findPerimeterLine(perimeterCloud, normals, selectedPoints[i - 1], selectedPoints[i]);
+	}
+	std::cout << "Displaying Perimeter";
+	pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgbPerm(perimeterCloud);
+	viewer->addPointCloud<pcl::PointXYZRGB>(inputCloud, rgbPerm, "Perimeter Points");
+	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "Perimeter Points");
+}
+void findPath(pcl::visualization::PCLVisualizer *viewer)
+{
+	std::cout << "Finding Path";
+
+	if (viewer->contains("Path"))
+	{
 		viewer->removePointCloud("Path");
 	}
-  	// pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb_input(input_cloud);
-  	// viewer->addPointCloud<pcl::PointXYZRGB> (input_cloud, rgb_input, "Path");
-	// viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "Path");
 
+	pcl::PointCloud<pcl::Normal>::Ptr normals = computeNormals(0.05);
+
+	viewer->addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(cloud, normals, 10, 0.05, "normals");
+
+	calculateStepSize();
+
+	createPerimeter(viewer, normals, stepSize);
+
+	std::vector<pcl::PointXYZ> tragectory;
+	pcl::PointCloud<pcl::PointXYZRGB> tragCloud;
+	std::vector<pcl::Normal> tragNormals;
 }
 
-void prompt_width_input(pcl::visualization::PCLVisualizer *viewer){
-	double width;
-    std::cout << "Please enter the width value: ";
-    std::cin >> width;
-    std::cout << "You have entered width: " << width << std::endl;
-	find_path(viewer, width);
-}
-
-
-
-void pointPickingEventOccurred(const pcl::visualization::PointPickingEvent& event, void* viewer_void)
+void promptWidthInput(pcl::visualization::PCLVisualizer *viewer)
 {
-    float x, y, z;
-	std::cout<<"picking pt";
-	pcl::visualization::PCLVisualizer* viewer = static_cast<pcl::visualization::PCLVisualizer*>(viewer_void);
-    if (event.getPointIndex() == -1)
-    {
-        return;
-    }
-    event.getPoint(x, y, z);
+	std::cout << "Please enter the width value: ";
+	std::cin >> width;
+	std::cout << "You have entered width: " << width << std::endl;
+}
 
-	
-	selected_points.push_back(pcl::PointXYZ(x, y, z));
+int findPointIndex(float x, float y, float z)
+{
+	for (size_t i = 0; i < cloud->points.size(); i++)
+	{
+		const pcl::PointXYZ &point = cloud->points[i];
+		if (point.x == x && point.y == y && point.z == z)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+void pointPickingEventOccurred(const pcl::visualization::PointPickingEvent &event, void *viewer_void)
+{
+	float x, y, z;
+	std::cout << "picking pt";
+	pcl::visualization::PCLVisualizer *viewer = static_cast<pcl::visualization::PCLVisualizer *>(viewer_void);
+	if (event.getPointIndex() == -1)
+	{
+		return;
+	}
+	event.getPoint(x, y, z);
+
+	selectedPoints.push_back(findPointIndex(x, y, z));
 
 	pcl::PointXYZRGB selection;
 
@@ -68,151 +234,97 @@ void pointPickingEventOccurred(const pcl::visualization::PointPickingEvent& even
 	selection.g = 0;
 	selection.b = 0;
 
-	input_cloud->points.push_back(selection);
+	inputCloud->points.push_back(selection);
 
-
-	if(viewer->contains("Input Points")){
+	if (viewer->contains("Input Points"))
+	{
 		viewer->removePointCloud("Input Points");
 	}
-  	pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb_input(input_cloud);
-  	viewer->addPointCloud<pcl::PointXYZRGB> (input_cloud, rgb_input, "Input Points");
+	pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb_input(inputCloud);
+	viewer->addPointCloud<pcl::PointXYZRGB>(inputCloud, rgb_input, "Input Points");
 	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "Input Points");
 
-    std::cout << "Point coordinate ( " << x << ", " << y << ", " << z << ")" << std::endl;
+	std::cout << "Point coordinate ( " << x << ", " << y << ", " << z << ")" << std::endl;
 }
 
-void keyboardEventOccurred (const pcl::visualization::KeyboardEvent &event, void* viewer_void)
+void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void *viewer_void)
 
 {
 
-  pcl::visualization::PCLVisualizer *viewer = static_cast<pcl::visualization::PCLVisualizer *> (viewer_void);	
-  if (event.getKeySym () == "c" && event.keyDown ())
+	pcl::visualization::PCLVisualizer *viewer = static_cast<pcl::visualization::PCLVisualizer *>(viewer_void);
+	if (event.getKeySym() == "c" && event.keyDown())
 
-  {
+	{
 
-    std::cout << "c was pressed => clearing all inputs" << std::endl;
-	selected_points.clear();
-	input_cloud->points.clear();
-	if(viewer->contains("Input Points")){
-		viewer->removePointCloud("Input Points");
+		std::cout << "c was pressed => clearing all inputs" << std::endl;
+		selectedPoints.clear();
+		inputCloud->points.clear();
+		if (viewer->contains("Input Points"))
+		{
+			viewer->removePointCloud("Input Points");
+		}
 	}
-    
-
-  }else if(event.getKeySym () == "k" && event.keyDown ()){
-    std::cout << "k was pressed => finding path" << std::endl;
-	if(selected_points.size() > 2){
-		prompt_width_input(viewer);
-
-	}else{
-		std::cout << selected_points.size() << " points were selected" << std::endl;
-    	std::cout << "Please select 3 or more points" << std::endl;
+	else if (event.getKeySym() == "k" && event.keyDown())
+	{
+		std::cout << "k was pressed => finding path" << std::endl;
+		if (selectedPoints.size() > 2)
+		{
+			promptWidthInput(viewer);
+			std::cout << "calling findPath";
+			findPath(viewer);
+		}
+		else
+		{
+			std::cout << selectedPoints.size() << " points were selected" << std::endl;
+			std::cout << "Please select 3 or more points" << std::endl;
+		}
 	}
-  }
-
 }
-
-
 
 pcl::visualization::PCLVisualizer::Ptr createView(pcl::PointCloud<pcl::PointXYZ>::ConstPtr cloud)
 
 {
-  pcl::visualization::PCLVisualizer::Ptr viewer (new pcl::visualization::PCLVisualizer ("3D Viewer"));
+	pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("3D Viewer"));
 
-  viewer->setBackgroundColor (0, 0, 0);
-  viewer->addPointCloud<pcl::PointXYZ> (cloud, "Original Surface");
-  
+	viewer->setBackgroundColor(0, 0, 0);
+	viewer->addPointCloud<pcl::PointXYZ>(cloud, "Original Surface");
 
-//   pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb_path(path_cloud);
-//   viewer->addPointCloud<pcl::PointXYZRGB> (path_cloud, rgb_path, "Path Points");
+	viewer->addCoordinateSystem(1.0);
 
-//   viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "Input Points");
-  
+	viewer->initCameraParameters();
 
-//   viewer->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "sample cloud");
+	viewer->addText("Choose points to create the boundary by using 'shift + left-mouse-button'", 10, 80, "instruction1");
+	viewer->addText("Points should be chosen in the order that they will be connected to create the boundary'", 10, 60, "instruction2");
+	viewer->addText("Press 'c' to clear selected points", 10, 40, "instruction3");
+	viewer->addText("Press 'k' to confirm selected points and continue to width input", 10, 20, "instruction4");
 
-  viewer->addCoordinateSystem (1.0);
+	viewer->registerPointPickingCallback(pointPickingEventOccurred, (void *)viewer.get());
 
-  viewer->initCameraParameters ();
+	viewer->registerKeyboardCallback(keyboardEventOccurred, (void *)viewer.get());
 
-  viewer->addText("Choose points to create the boundary by using 'shift + left-mouse-button'", 10, 60, "instruction1");
-  viewer->addText("Press 'c' to clear selected points", 10, 40, "instruction2");
-  viewer->addText("Press 'k' to confirm selected points and continue to width input", 10, 20, "instruction3");
-
-  viewer->registerPointPickingCallback(pointPickingEventOccurred, (void*)viewer.get());
-
-  viewer->registerKeyboardCallback (keyboardEventOccurred, (void*)viewer.get());
-
-
-
-  return (viewer);
-
+	return (viewer);
 }
 
-
-
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
-    if(pcl::io::loadPCDFile<pcl::PointXYZ> ("input.pcd", *cloud) == -1)
-    {
-        
-        PCL_ERROR ("Couldn't read file input.pcd \n");
-        return (-1);
-    }
-    std::cout << "Loaded "
-                <<cloud -> width * cloud-> height
-                << " data points from input.pcd";
+	if (pcl::io::loadPCDFile<pcl::PointXYZ>("input.pcd", *cloud) == -1)
+	{
 
- 
+		PCL_ERROR("Couldn't read file input.pcd \n");
+		return (-1);
+	}
+	std::cout << "Loaded "
+			  << cloud->width * cloud->height
+			  << " data points from input.pcd";
+
 	pcl::visualization::PCLVisualizer::Ptr viewer = createView(cloud);
 
-    while (!viewer->wasStopped ())
+	while (!viewer->wasStopped())
 
-  	{
-    	viewer->spinOnce (100);
-    	std::this_thread::sleep_for(100ms);
-  	}
+	{
+		viewer->spinOnce(100);
+		std::this_thread::sleep_for(100ms);
+	}
 
-
-
-    // // Step 3: Create a convex hull from these randomly selected points
-    // pcl::PointCloud<pcl::PointXYZ>::Ptr convex_hull(new pcl::PointCloud<pcl::PointXYZ>());
-    // pcl::ConvexHull<pcl::PointXYZ> chull;
-    // chull.setInputCloud(random_interior_points);
-    // chull.setDimension(3);  // Set to 3D
-
-    // std::vector<pcl::Vertices> hull_vertices;
-    // chull.reconstruct(*convex_hull, hull_vertices);
-
-    // // Step 4: Crop the original point cloud using the convex hull
-    // pcl::CropHull<pcl::PointXYZ> cropHullFilter;
-    // cropHullFilter.setInputCloud(cloud);       // The original point cloud to crop
-    // cropHullFilter.setHullCloud(convex_hull);  // The convex hull created from random points
-    // cropHullFilter.setHullIndices(hull_vertices);
-    // cropHullFilter.setDim(3);  // 3D cropping
-
-    // pcl::PointCloud<pcl::PointXYZ>::Ptr cropped_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-    // cropHullFilter.filter(*cropped_cloud);
-
-    // // Step 5: Save the cropped point cloud
-    // pcl::io::savePCDFileASCII("cropped_cloud.pcd", *cropped_cloud);
-    // std::cout << "Cropped surface saved" << std::endl;
-
-    return 0;
+	return 0;
 }
-
-
-// void pp_callback(const pcl::visualization::PointPickingEvent& event, void* args)
-// {
-//     struct callback_args* data = (struct callback_args*)args;
-//     if (event.getPointIndex() == -1)
-//         return;
-//     PointT current_point;
-//     event.getPoint(current_point.x, current_point.y, current_point.z);
-//     data->clicked_points_3d->clear();//将上次选的点清空
-//     data->clicked_points_3d->points.push_back(current_point);//添加新选择的点
-//     // 设置屏幕渲染属性，红色显示选择的点
-//     pcl::visualization::PointCloudColorHandlerCustom<PointT> red(data->clicked_points_3d, 255, 0, 0);
-//     data->viewerPtr->removePointCloud("clicked_points");
-//     data->viewerPtr->addPointCloud(data->clicked_points_3d, red, "clicked_points");
-//     data->viewerPtr->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, "clicked_points");
-//     std::cout <<"点的坐标为:"<< "x="<<current_point.x << "y= " << current_point.y << "z= " << current_point.z << std::endl;
