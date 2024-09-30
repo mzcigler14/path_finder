@@ -19,6 +19,17 @@ using namespace std;
 
 using namespace std::chrono_literals;
 
+/*
+ASSUMPTIONS:
+
+area to generally trapazoidal (for finding inwards position)
+
+
+
+
+
+
+*/
 std::vector<int> selectedPoints;
 
 std::set<int> perimeter;
@@ -26,6 +37,7 @@ std::vector<int> startLine;
 
 double stepSize;
 double width;
+bool orientation_ccw;
 
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr inputCloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -63,7 +75,7 @@ double distEuc(pcl::PointXYZ pt1, pcl::PointXYZ pt2)
 }
 void calculateStepSize(int numMoves = 150)
 {
-	std::cout << "Calculating step size";
+	std::cout << "Calculating step size" << std::endl;
 	if (cloud->points.empty() || numMoves <= 0)
 	{
 		stepSize = 0;
@@ -81,19 +93,33 @@ void calculateStepSize(int numMoves = 150)
 
 	for (int move = 0; move < numMoves; ++move)
 	{
-		std::vector<int> nearestIndices(1);
-		std::vector<float> nearestDistances(1);
+		std::vector<int> nearestIndices(10);
+		std::vector<float> nearestDistances(10);
 
-		if (kdtree.nearestKSearch(currentPoint, 1, nearestIndices, nearestDistances) > 0)
+		if (kdtree.nearestKSearch(currentPoint, 10, nearestIndices, nearestDistances) > 0)
 		{
-			int nearestIndex = nearestIndices[0];
-
+			int nearestIndex = nearestIndices[1];
+			int i = 2;
 			while (visited.find(nearestIndex) != visited.end() && visited.size() < cloud->points.size())
 			{
-				currentPoint = cloud->points[nearestIndex];
-				kdtree.nearestKSearch(currentPoint, 1, nearestIndices, nearestDistances);
-				nearestIndex = nearestIndices[0];
+				if (nearestIndices.size() > i)
+				{
+					nearestIndex = nearestIndices[i];
+					i++;
+				}
+				else
+				{
+					break;
+				}
+
+				// Break if all points have been visited
+				if (visited.size() == cloud->points.size())
+				{
+					std::cout << "All points have been visited." << std::endl;
+					break;
+				}
 			}
+
 			if (visited.find(nearestIndex) == visited.end())
 			{
 				pcl::PointXYZ nearestPoint = cloud->points[nearestIndex];
@@ -109,7 +135,7 @@ void calculateStepSize(int numMoves = 150)
 		}
 	}
 
-	stepSize = visited.size() > 1 ? cumulativeStep / double(visited.size() - 1) : 0;
+	stepSize = (visited.size() > 1) ? (cumulativeStep / (visited.size() - 1)) : 0;
 }
 
 vector<int> findNearest(pcl::PointXYZ searchPoint, int K = 1)
@@ -128,50 +154,176 @@ vector<int> findNearest(pcl::PointXYZ searchPoint, int K = 1)
 
 void findPerimeterLine(pcl::PointCloud<pcl::PointXYZRGB>::Ptr perimeterCloud,
 					   pcl::PointCloud<pcl::Normal>::Ptr normals,
+					   std::vector<int> &permIdxVec,
 					   int index1,
 					   int index2)
 {
 	pcl::PointXYZRGB rgbPt;
 	pcl::PointXYZ pt1(cloud->points[index1]);
 	pcl::PointXYZ pt2(cloud->points[index2]);
-	while (distEuc(pt1, pt2) >= width)
+	permIdxVec.push_back(index1);
+	int idx = index1;
+	while (distEuc(pt1, pt2) > stepSize)
 	{
-
 		Eigen::Vector3f direction(pt2.x - pt1.x, pt2.y - pt1.y, pt2.z - pt1.z);
-		Eigen::Vector3f projected = projectVector(direction, normals->points[index1]);
-		pt1.x += projected.x();
-		pt1.y += projected.y();
-		pt1.z += projected.z();
+		Eigen::Vector3f projected = projectVector(direction, normals->points[idx]).normalized();
+		pt1.x += projected.x() * stepSize;
+		pt1.y += projected.y() * stepSize;
+		pt1.z += projected.z() * stepSize;
 		vector<int> newPtIdx = findNearest(pt1);
-		pt1 = cloud->points[newPtIdx[0]];
+		idx = newPtIdx[0];
+		pt1 = cloud->points[idx];
 		rgbPt.x = pt1.x;
 		rgbPt.y = pt1.y;
 		rgbPt.z = pt1.z;
 
-		rgbPt.r = 0;
-		rgbPt.g = 255;
+		rgbPt.r = 255;
+		rgbPt.g = 0;
 		rgbPt.b = 0;
+
+		// std::cout << "pt1.x" << pt1.x << "pt1.y" << pt1.y << "pt1.y" << pt1.y << std::endl;
+
 		perimeterCloud->points.push_back(rgbPt);
+		permIdxVec.push_back(idx);
+		// std::cout << distEuc(pt1, pt2) << std::endl;
 	}
 }
 
-void createPerimeter(pcl::visualization::PCLVisualizer *viewer, pcl::PointCloud<pcl::Normal>::Ptr normals, double stepSize)
+void createPerimeter(pcl::visualization::PCLVisualizer *viewer, pcl::PointCloud<pcl::Normal>::Ptr normals, std::vector<int> &permIdxVec)
 
 {
-	std::cout << "Creating Perimeter";
+	std::cout << "Creating Perimeter" << std::endl;
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr perimeterCloud(new pcl::PointCloud<pcl::PointXYZRGB>);
-	for (int i = 0; i < selectedPoints.size(); ++i)
+	for (int i = 1; i < selectedPoints.size(); i++)
 	{
-		findPerimeterLine(perimeterCloud, normals, selectedPoints[i - 1], selectedPoints[i]);
+		findPerimeterLine(perimeterCloud, normals, permIdxVec, selectedPoints[i - 1], selectedPoints[i]);
 	}
-	std::cout << "Displaying Perimeter";
+	findPerimeterLine(perimeterCloud, normals, permIdxVec, *(selectedPoints.end() - 1), selectedPoints[0]);
+
+	std::cout << "Displaying Perimeter" << std::endl;
 	pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgbPerm(perimeterCloud);
-	viewer->addPointCloud<pcl::PointXYZRGB>(inputCloud, rgbPerm, "Perimeter Points");
-	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "Perimeter Points");
+	viewer->addPointCloud<pcl::PointXYZRGB>(perimeterCloud, rgbPerm, "Perimeter Points");
+	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 1.5, "Perimeter Points");
 }
+
+Eigen::Vector3f findStepDir(Eigen::Vector3f permDir, Eigen::Vector3f normal)
+{
+	Eigen::Vector3f dir;
+	//  || (!orientation_ccw && normal.z() < 0)
+	// if ((orientation_ccw && normal.z() < 0) || (!orientation_ccw && normal.z() < 0))
+	// {
+	dir = (normal.cross(permDir)).normalized();
+	// }
+	// else
+	// {
+	// 	dir = ((-normal).cross(permDir)).normalized();
+	// // }
+	// std::cout << "Directoin vector x: " << dir.x() << " y: " << dir.y() << " z: " << dir.z() << std::endl;
+
+	return dir;
+}
+
+Eigen::Vector3f subtractPoints(pcl::PointXYZ a, pcl::PointXYZ b)
+{
+	Eigen::Vector3f solution;
+	solution.x() = a.x - b.x;
+	solution.y() = a.y - b.y;
+	solution.z() = a.z - b.z;
+	return solution;
+}
+
+void generateGrid(pcl::PointCloud<pcl::PointXYZRGB>::Ptr gridCloud,
+				  pcl::PointCloud<pcl::Normal>::Ptr normals,
+				  std::vector<int> &permIdxVec)
+{
+	std::cout << "inside create grid" << std::endl;
+	std::set<int> areaCovered;
+	std::set<int> permSet(permIdxVec.begin(), permIdxVec.end());
+	// want permindex to  be ordered so I replicate the perimeter untill an "edge"
+	// reminder i is the index of permIdxVec not the index in the cloud
+	double offset;
+	int currentCloudIdx;
+	int newCloudIdx;
+	pcl::PointXYZRGB currentPt;
+	Eigen::Vector3f permDir;
+	pcl::PointXYZ searchPt;
+	Eigen::Vector3f normal;
+	Eigen::Vector3f stepDir;
+
+	for (int i = 0; i < permIdxVec.size(); i++)
+	{
+		offset = 0;
+		currentCloudIdx = permIdxVec[i];
+		if (i == 0)
+		{
+			permDir = subtractPoints(cloud->points[permIdxVec[i]], cloud->points[permIdxVec[permIdxVec.size() - 1]]) +
+					  (subtractPoints(cloud->points[permIdxVec[i + 1]], cloud->points[permIdxVec[i]]));
+		}
+		else if (i == permIdxVec.size() - 1)
+		{
+			permDir = subtractPoints(cloud->points[permIdxVec[i]], cloud->points[permIdxVec[i - 1]]) +
+					  (subtractPoints(cloud->points[permIdxVec[0]], cloud->points[permIdxVec[i]]));
+		}
+		else
+		{
+			permDir = subtractPoints(cloud->points[permIdxVec[i]], cloud->points[permIdxVec[i - 1]]) +
+					  (subtractPoints(cloud->points[permIdxVec[i + 1]], cloud->points[permIdxVec[i]]));
+		}
+
+		// if current point is on the perimeter or
+		while (offset == 0 ||
+			   (permSet.end() == permSet.find(currentCloudIdx) &&
+				areaCovered.end() == areaCovered.find(currentCloudIdx)))
+		{
+			normal.x() = normals->points[currentCloudIdx].normal_x;
+			normal.y() = normals->points[currentCloudIdx].normal_y;
+			normal.z() = normals->points[currentCloudIdx].normal_z;
+			if (cloud->points[currentCloudIdx].x < 0)
+			{
+				stepDir = findStepDir(permDir, normal);
+			}
+			else
+			{
+				stepDir = findStepDir(permDir, -normal);
+			}
+
+			std::cout << "Directoin vector x: " << stepDir.x() << " y: " << stepDir.y() << " z: " << stepDir.z() << std::endl;
+
+			searchPt.x = cloud->points[currentCloudIdx].x + stepDir.x() * stepSize;
+			searchPt.y = cloud->points[currentCloudIdx].y + stepDir.y() * stepSize;
+			searchPt.z = cloud->points[currentCloudIdx].z + stepDir.z() * stepSize;
+
+			std::cout << "searchpt vector x: " << searchPt.x << " y: " << searchPt.y << " z: " << searchPt.z << std::endl;
+
+			newCloudIdx = findNearest(searchPt)[0];
+			// find new which is the closest point within step size in thedirection above
+			// add new - current distance to offset
+			offset += distEuc(cloud->points[newCloudIdx], cloud->points[currentCloudIdx]);
+			if (offset >= width)
+			{
+
+				currentPt.x = cloud->points[currentCloudIdx].x;
+				currentPt.y = cloud->points[currentCloudIdx].y;
+				currentPt.z = cloud->points[currentCloudIdx].z;
+
+				currentPt.r = 0;
+				currentPt.g = 255;
+				currentPt.b = 0;
+
+				gridCloud->points.push_back(currentPt);
+				offset = 0;
+			}
+			areaCovered.insert(currentCloudIdx);
+			currentCloudIdx = newCloudIdx;
+			std::cout << "Point: " << i << ", offset: " << offset << std::endl;
+		}
+	}
+	std::cout << "grid created" << gridCloud->points.size() << std::endl;
+}
+
 void findPath(pcl::visualization::PCLVisualizer *viewer)
 {
-	std::cout << "Finding Path";
+	std::cout << "Finding Path" << std::endl;
 
 	if (viewer->contains("Path"))
 	{
@@ -180,22 +332,53 @@ void findPath(pcl::visualization::PCLVisualizer *viewer)
 
 	pcl::PointCloud<pcl::Normal>::Ptr normals = computeNormals(0.05);
 
-	viewer->addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(cloud, normals, 10, 0.05, "normals");
+	// viewer->addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(cloud, normals, 10, 0.05, "normals");
 
 	calculateStepSize();
+	std::cout << "Step Size: " << stepSize << std::endl;
+	std::vector<int> permIdxVec;
+	createPerimeter(viewer, normals, permIdxVec);
 
-	createPerimeter(viewer, normals, stepSize);
+	std::cout << "Create Grid" << std::endl;
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr gridCloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+	generateGrid(gridCloud, normals, permIdxVec);
+
+	std::cout << "Displayy grid" << std::endl;
+	pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgbGrid(gridCloud);
+	viewer->addPointCloud<pcl::PointXYZRGB>(gridCloud, rgbGrid, "Grid Points");
+	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 1.5, "Grid Points");
 
 	std::vector<pcl::PointXYZ> tragectory;
 	pcl::PointCloud<pcl::PointXYZRGB> tragCloud;
 	std::vector<pcl::Normal> tragNormals;
 }
 
-void promptWidthInput(pcl::visualization::PCLVisualizer *viewer)
+void promptInput(pcl::visualization::PCLVisualizer *viewer)
 {
+	int orientation;
 	std::cout << "Please enter the width value: ";
 	std::cin >> width;
 	std::cout << "You have entered width: " << width << std::endl;
+	std::cout << "Were the points selected clockwise (enter 0) or counterclockwise (enter 1): ";
+	std::cin >> orientation;
+	if (orientation == 1)
+	{
+
+		std::cout << "Points selected CCW" << std::endl;
+		orientation_ccw = true;
+		findPath(viewer);
+	}
+	else if (orientation == 0)
+	{
+		std::cout << "Points selected CW" << std::endl;
+		orientation_ccw = false;
+		findPath(viewer);
+	}
+	else
+	{
+		std::cout << "Invalid orientation, try again" << std::endl;
+		promptInput(viewer);
+	}
 }
 
 int findPointIndex(float x, float y, float z)
@@ -230,9 +413,9 @@ void pointPickingEventOccurred(const pcl::visualization::PointPickingEvent &even
 	selection.y = y;
 	selection.z = z;
 
-	selection.r = 255;
+	selection.r = 0;
 	selection.g = 0;
-	selection.b = 0;
+	selection.b = 255;
 
 	inputCloud->points.push_back(selection);
 
@@ -242,7 +425,7 @@ void pointPickingEventOccurred(const pcl::visualization::PointPickingEvent &even
 	}
 	pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb_input(inputCloud);
 	viewer->addPointCloud<pcl::PointXYZRGB>(inputCloud, rgb_input, "Input Points");
-	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "Input Points");
+	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 7, "Input Points");
 
 	std::cout << "Point coordinate ( " << x << ", " << y << ", " << z << ")" << std::endl;
 }
@@ -269,9 +452,7 @@ void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void 
 		std::cout << "k was pressed => finding path" << std::endl;
 		if (selectedPoints.size() > 2)
 		{
-			promptWidthInput(viewer);
-			std::cout << "calling findPath";
-			findPath(viewer);
+			promptInput(viewer);
 		}
 		else
 		{
