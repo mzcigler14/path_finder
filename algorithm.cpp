@@ -44,6 +44,7 @@ bool orientation_ccw;
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr inputCloud(new pcl::PointCloud<pcl::PointXYZRGB>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr perimeterCloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+std::vector<pcl::Vertices> polygonsPerm;
 pcl::CropHull<pcl::PointXYZRGB> cropHullPerm;
 
 pcl::PointCloud<pcl::Normal>::Ptr computeNormals(double searchRadius, pcl::PointCloud<pcl::PointXYZ>::Ptr inCloud)
@@ -206,6 +207,10 @@ void createPerimeter(pcl::visualization::PCLVisualizer *viewer, pcl::PointCloud<
 	}
 	findPerimeterLine(perimeterCloud, normals, permIdxVec, *(selectedPoints.end() - 1), selectedPoints[0]);
 
+	perimeterCloud->width = perimeterCloud->points.size();
+	perimeterCloud->height = 1;
+	perimeterCloud->is_dense = true;
+
 	std::cout << "Displaying Perimeter" << std::endl;
 	pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgbPerm(perimeterCloud);
 	viewer->addPointCloud<pcl::PointXYZRGB>(perimeterCloud, rgbPerm, "Perimeter Points");
@@ -243,13 +248,49 @@ void convertXYZRGBtoXYZ(pcl::PointCloud<pcl::PointXYZRGB>::Ptr input,
 						pcl::PointCloud<pcl::PointXYZ>::Ptr output)
 {
 
-	for (size_t i = 0; input->points.size(); i++)
+	for (int i = 0; i < input->points.size(); i++)
 	{
 		pcl::PointXYZ pt;
 		pt.x = input->points[i].x;
 		pt.y = input->points[i].y;
 		pt.z = input->points[i].z;
 		output->points.push_back(pt);
+	}
+}
+
+void convertXYZtoXYZRGB(int r, int g, int b, pcl::PointCloud<pcl::PointXYZ>::Ptr input,
+						pcl::PointCloud<pcl::PointXYZRGB>::Ptr output)
+{
+
+	for (int i = 0; i < input->points.size(); i++)
+	{
+		pcl::PointXYZRGB pt;
+		pt.x = input->points[i].x;
+		pt.y = input->points[i].y;
+		pt.z = input->points[i].z;
+		pt.r = r;
+		pt.g = g,
+		pt.b = b;
+		output->points.push_back(pt);
+	}
+}
+void createPolygons(pcl::PointCloud<pcl::PointXYZ>::Ptr inCloud, std::vector<pcl::Vertices> &polygons)
+{
+	int size = inCloud->points.size();
+
+	for (int i = 0; i < size; i++)
+	{
+		int j, k;
+
+		// Handle the wrapping of indices for the triangle creation
+		j = (i + 1) % size; // Next point in the cloud (wrap around using modulo)
+		k = (i + 2) % size; // The point after the next (wrap around using modulo)
+
+		pcl::Vertices v;
+		v.vertices.push_back(i); // Current point
+		v.vertices.push_back(j); // Next point
+		v.vertices.push_back(k); // Point after the next
+		polygons.push_back(v);	 // Store the triangle
 	}
 }
 
@@ -275,29 +316,45 @@ int findPointInCloud(double x, double y, double z, pcl::PointCloud<pcl::PointXYZ
 void generateGrid(pcl::PointCloud<pcl::PointXYZRGB>::Ptr gridCloud,
 				  std::vector<int> &permIdxVec)
 {
-
+	std::cout << "in gen ggrid" << std::endl;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr permCloudXYZ(new pcl::PointCloud<pcl::PointXYZ>);
-	convertXYZRGBtoXYZ(perimeterCloud, permCloudXYZ);
+	std::cout << "converrt" << std::endl;
+	convertXYZRGBtoXYZ(inputCloud, permCloudXYZ);
+	std::cout << "hull" << std::endl;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr hull(new pcl::PointCloud<pcl::PointXYZ>);
-	// Calculate Hull based on perimeterCloud
-	pcl::ConcaveHull<pcl::PointXYZ> hull_calculator;
-	std::vector<pcl::Vertices> polygons; // This will hold the hull indices
+	// // Calculate Hull based on perimeterCloud
 
-	hull_calculator.setInputCloud(permCloudXYZ);  // Set the input as perimeterCloud
-	hull_calculator.setAlpha(20);				  // Set the alpha value, adjust as needed for concave hull
+	std::cout << "hullcalc" << std::endl;
+	pcl::ConvexHull<pcl::PointXYZ> hull_calculator;
+	// std::cout << "polys" << std::endl;
+	std::vector<pcl::Vertices> polygons; // This will hold the hull indices
+	// std::cout << "hullcalculate." << std::endl;
+	// createPolygons(hull, polygons);
+	hull_calculator.setInputCloud(permCloudXYZ); // Set the input as perimeterCloud
+	// // hull_calculator.setAlpha(20);				  // Set the alpha value, adjust as needed for concave hull
 	hull_calculator.reconstruct(*hull, polygons); // Compute the hull and get the polygons (hull indices)
 	int dim = hull_calculator.getDimension();	  // Get the dimension of the hull (likely 3)
-
+	// std::cout << "crophull,dim" << dim << std::endl;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloudCropped(new pcl::PointCloud<pcl::PointXYZ>);
 	// Crop Hull using the calculated perimeterCloud hull
-	pcl::CropHull<pcl::PointXYZ> crop_filter;
-	crop_filter.setInputCloud(cloud);	  // Set the cloud you want to crop
-	crop_filter.setHullCloud(hull);		  // Set the hull calculated from perimeterCloud
-	crop_filter.setHullIndices(polygons); // Set the hull indices (polygons) from the hull calculation
-	crop_filter.setDim(dim);			  // Set the dimension of the hull (3 for 3D)
-	crop_filter.filter(*cloudCropped);
+
+	// pcl::CropHull<pcl::PointXYZ> crop_filter;
+	// crop_filter.setInputCloud(cloud);	  // Set the cloud you want to crop
+	// crop_filter.setHullCloud(hull);		  // Set the hull calculated from perimeterCloud
+	// crop_filter.setHullIndices(polygons); // Set the hull indices (polygons) from the hull calculation
+	// crop_filter.setDim(3);				  // Set the dimension of the hull (3 for 3D)
+	// crop_filter.filter(*cloudCropped);
+	convertXYZtoXYZRGB(0, 255, 0, hull, gridCloud);
+
+	return;
 
 	pcl::PointCloud<pcl::Normal>::Ptr normals = computeNormals(0.05, cloudCropped);
+	for (int i = 0; i < cloudCropped->points.size(); i++)
+	{
+
+		std::cout << "cloudCroppedPoints x: " << cloudCropped->points[i].x << " y: " << cloudCropped->points[i].y << " z: " << cloudCropped->points[i].z << std::endl;
+		std::cout << "normal x: " << normals->points[i].normal_x << " y: " << normals->points[i].normal_y << " z: " << normals->points[i].normal_z << std::endl;
+	}
 
 	std::cout << "inside create grid" << std::endl;
 	std::set<int> areaCovered;
@@ -359,13 +416,13 @@ void generateGrid(pcl::PointCloud<pcl::PointXYZRGB>::Ptr gridCloud,
 				stepDir = findStepDir(permDir, -normal);
 			}
 
-			std::cout << "Directoin vector x: " << stepDir.x() << " y: " << stepDir.y() << " z: " << stepDir.z() << std::endl;
+			// std::cout << "Directoin vector x: " << stepDir.x() << " y: " << stepDir.y() << " z: " << stepDir.z() << std::endl;
 
 			searchPt.x = startPt.x + stepDir.x() * stepSize;
 			searchPt.y = startPt.y + stepDir.y() * stepSize;
 			searchPt.z = startPt.z + stepDir.z() * stepSize;
 
-			std::cout << "searchpt vector x: " << searchPt.x << " y: " << searchPt.y << " z: " << searchPt.z << std::endl;
+			// std::cout << "searchpt vector x: " << searchPt.x << " y: " << searchPt.y << " z: " << searchPt.z << std::endl;
 
 			newCloudIdx = findNearest<pcl::PointXYZ>(searchPt, cloudCropped)[0];
 
@@ -418,7 +475,7 @@ void findPath(pcl::visualization::PCLVisualizer *viewer)
 	std::cout << "Displayy grid" << std::endl;
 	pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgbGrid(gridCloud);
 	viewer->addPointCloud<pcl::PointXYZRGB>(gridCloud, rgbGrid, "Grid Points");
-	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 1.5, "Grid Points");
+	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, "Grid Points");
 
 	std::vector<pcl::PointXYZRGB> tragectory;
 	pcl::PointCloud<pcl::PointXYZRGB> tragCloud;
