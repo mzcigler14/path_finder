@@ -182,7 +182,7 @@ vector<int> findNearest(PointT searchPoint, typename pcl::PointCloud<PointT>::Pt
 bool checkIntersection(pcl::PointXY p, pcl::PointXY a, pcl::PointXY b)
 {
 	// Check if point p is above or below the line
-	if (p.y < std::min(a.y, b.y) || p.y > std::max(a.y, b.y))
+	if (p.y < std::min(a.y, b.y) || p.y >= std::max(a.y, b.y))
 	{
 		return false; // p is outside the vertical bounds of the line segment
 	}
@@ -200,7 +200,7 @@ bool checkIntersection(pcl::PointXY p, pcl::PointXY a, pcl::PointXY b)
 	double xInter = a.x + m * (p.y - a.y); // calculate the x value where the ray intersects the line segment
 
 	// Return true if the intersection point is to the right of point p
-	return p.x < xInter;
+	return p.x <= xInter;
 }
 
 /**
@@ -415,7 +415,7 @@ void addTrajPt(int index,
 		// if the gap is not changing return, avoid infinite loop
 		if (gap == gapOld)
 		{
-			cout << "Gap not changing" << endl;
+			// cout << "Gap not changing" << endl;
 			return;
 		}
 		else
@@ -445,18 +445,25 @@ void addTrajPt(int index,
 					pow(cloud2d->points[nearest].y - prevPt.y, 2)) /
 			   abs((normalZ != 0.0) ? normalZ : MAXFLOAT); // using the z of the normal project distance into 3D
 
-		if (widening && nearest != prevNearest && pointInPoly(prevNearest, selectedPoints))
+		if (widening && nearest != prevNearest)
 		{
-			TrajPt trajPt(prevNearest, cloud->points[prevNearest], normals->points[prevNearest]);
-			// if adding to front of line insert
-			if (addToFront)
+			if (pointInPoly(prevNearest, selectedPoints))
 			{
-				output.insert(output.begin(), trajPt);
+				TrajPt trajPt(nearest, cloud->points[nearest], normals->points[nearest]);
+				// if adding to front of line insert
+				if (addToFront)
+				{
+					output.insert(output.begin(), trajPt);
+				}
+				else
+				{
+					output.push_back(trajPt);
+					// cout << "Point added to output: " << trajPt.index << endl;
+				}
 			}
 			else
 			{
-				output.push_back(trajPt);
-				// cout << "Point added to output: " << trajPt.index << endl;
+				break;
 			}
 		}
 	}
@@ -464,7 +471,6 @@ void addTrajPt(int index,
 	if (!widening && pointInPoly(prevNearest, selectedPoints))
 	{
 		TrajPt trajPt(prevNearest, cloud->points[prevNearest], normals->points[prevNearest]);
-
 		output.push_back(trajPt);
 		// cout << "Point added to output: " << trajPt.index << endl;
 	}
@@ -611,14 +617,14 @@ void connectTrajectory(vector<TrajPt> &vecTrajectory, vector<vector<TrajPt>> &ve
  */
 void findPath(pcl::visualization::PCLVisualizer *viewer)
 {
-	cout << "Finding Path" << endl;
+	// cout << "Finding Path" << endl;
 
 	computeNormals(cloud, normals);
 
 	// viewer->addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(cloud, normals, 10, 0.05, "normals");
 
-	// create  a 2d point cloud on plane (0, 0, 1), working in 2D will make the search algorithms fasteer
-	// ccloud2d indicies will match cloud
+	// create a 2d point cloud on plane(0, 0, 1), working in 2D will make the search algorithms fasteer
+	//    ccloud2d indicies will match cloud
 	create2dCloud();
 
 	// create an estimate for the step size between points in the 2D plane
