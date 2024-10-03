@@ -21,19 +21,6 @@ using namespace std;
 
 using namespace std::chrono_literals;
 
-/*
-ASSUMPTIONS:
-though of at the end just find the normal with the smallest z on each line and use that to mvoe all the points on the line
-
-
-area to generally trapazoidal (for finding inwards position)
-space is not a critical issue
-
-
-
-
-
-*/
 vector<int> selectedPoints;
 
 double stepSize;
@@ -167,7 +154,7 @@ vector<int> findNearest(PointT searchPoint, typename pcl::PointCloud<PointT>::Pt
 };
 
 /**
- * @brief Checks if a horizontal ray from -infinity to point p intersects the line segment ab.
+ * @brief Checks if a horizontal ray from +infinity to point p intersects the line segment ab.
  *
  * This function checks if a horizontal ray extending from point p intersects the line segment defined
  * by points a and b. It first verifies if the point p is within the vertical bounds of the line segment ab,
@@ -186,8 +173,7 @@ bool checkIntersection(pcl::PointXY p, pcl::PointXY a, pcl::PointXY b)
 	{
 		return false; // p is outside the vertical bounds of the line segment
 	}
-
-	// Check if the ray to the right from p intersects with the line segment ab
+	// chekc if line is horiontal
 	if (a.y == b.y)
 	{
 		// The line segment is horizontal
@@ -195,9 +181,12 @@ bool checkIntersection(pcl::PointXY p, pcl::PointXY a, pcl::PointXY b)
 		return p.y == a.y && (p.x >= std::min(a.x, b.x) && p.x <= std::max(a.x, b.x));
 	}
 
-	// Calculate the intersection points x
-	double m = (b.x - a.x) / (b.y - a.y);
-	double xInter = a.x + m * (p.y - a.y); // calculate the x value where the ray intersects the line segment
+	// Slope of the line ab
+	double m = (b.y - a.y) / (b.x - a.x);
+	// take the y coordinate of a, find the distance towards p.y, multiply thatby the
+	// inverse of the slope to get the distance horizontal at p.y and a.x from line ab
+	// adding a.x moves our frame of reference to the intersection of y = p.y and line a
+	double xInter = a.x + (1 / m) * (p.y - a.y);
 
 	// Return true if the intersection point is to the right of point p
 	return p.x <= xInter;
@@ -207,7 +196,7 @@ bool checkIntersection(pcl::PointXY p, pcl::PointXY a, pcl::PointXY b)
  * @brief Determines if a point is inside a polygon using the ray-casting method.
  *
  * This function checks whether a 2D point, defined by its index in 'cloud', lies inside a polygon.
- * It casts a horizontal ray to the point and counts how many times this ray intersects the polygon's edges.
+ * It casts a horizontal ray from the point and counts how many times this ray intersects the polygon's edges.
  * If the number of intersections is odd, the point is inside the polygon; otherwise, it is outside.
  *
  * @param pointIdx The index of the point in cloud2d/cloud.
@@ -243,7 +232,7 @@ bool pointInPoly(int pointIdx, vector<int> &poly)
 			pt1.x = cloud2d->points[poly[i - 1]].x;
 			pt1.y = cloud2d->points[poly[i - 1]].y;
 		}
-		// check if ray interesct the line, if it does change the inside boolean
+		// check if ray intersects the line, if it does change the inside boolean
 		if (checkIntersection(pt, pt1, pt2))
 		{
 			inside = !inside;
@@ -343,7 +332,7 @@ void calculateStepSize()
 }
 
 /**
- * @brief Connects two points by interpolating intermediate points along the line between them.
+ * @brief Connects two points by interpolating intermediate points along the line between them. Excludes to input points
  *
  *
  * @param output The vector of trajectory points to which the interpolated points will be added.
@@ -408,8 +397,8 @@ void addTrajPt(int index,
 
 	double gap = 0;
 	double gapOld = 1;
-	// if the gap  > width and the nearest (aka previous index woudl then be within width)
-	// is in the polygon add the point both output vector
+	// if the gap  > width (aka previous index would then be within width) and the nearest
+	// is in the polygon add the point to the output vector
 	while (gap < width)
 	{
 		// if the gap is not changing return, avoid infinite loop
@@ -445,11 +434,12 @@ void addTrajPt(int index,
 					pow(cloud2d->points[nearest].y - prevPt.y, 2)) /
 			   abs((normalZ != 0.0) ? normalZ : MAXFLOAT); // using the z of the normal project distance into 3D
 
+		// if function  is used by a widening function add each point that resides in the polygon
 		if (widening && nearest != prevNearest)
 		{
 			if (pointInPoly(prevNearest, selectedPoints))
 			{
-				TrajPt trajPt(nearest, cloud->points[nearest], normals->points[nearest]);
+				TrajPt trajPt(prevNearest, cloud->points[prevNearest], normals->points[prevNearest]);
 				// if adding to front of line insert
 				if (addToFront)
 				{
@@ -470,6 +460,7 @@ void addTrajPt(int index,
 	// not widening because pt already added
 	if (!widening && pointInPoly(prevNearest, selectedPoints))
 	{
+
 		TrajPt trajPt(prevNearest, cloud->points[prevNearest], normals->points[prevNearest]);
 		output.push_back(trajPt);
 		// cout << "Point added to output: " << trajPt.index << endl;
@@ -487,7 +478,7 @@ void addTrajPt(int index,
  */
 void checkWiden(vector<TrajPt> &line, Eigen::Vector2f &gridLineDir)
 {
-	// traverse parrellel to the line away from the back until the end of the line is within a distance of 'width' from the edge;
+	// traverse parellel to the line away from the back until the end of the line reaches the edge of the polygon
 	int count = line.size() - 1;
 	while (line.size() > count && (line.end() - 2)->index != (line.end() - 1)->index)
 	{
@@ -495,7 +486,7 @@ void checkWiden(vector<TrajPt> &line, Eigen::Vector2f &gridLineDir)
 		addTrajPt(line.back().index, line, gridLineDir, true, false);
 	}
 
-	// do the ssame for the front of the line
+	// do the same for the front of the line
 	count = line.size() - 1;
 
 	while (line.size() > count && (line.begin())->index != (line.begin() + 1)->index)
@@ -524,7 +515,7 @@ void createGrid(vector<vector<TrajPt>> &output,
 				Eigen::Vector2f &gridNormal,
 				Eigen::Vector2f &gridLineDir)
 {
-	// for each point in the line find the next point that is normal to the grid line that is the last point
+	// for each point in the line find the next point that is normal to the grid line and is the last point
 	// within the width
 	output.emplace_back();
 	for (TrajPt trajPt : initialLine)
@@ -532,7 +523,7 @@ void createGrid(vector<vector<TrajPt>> &output,
 		addTrajPt(trajPt.index, output[0], gridNormal);
 	}
 
-	// while the last vector had points inside the polygon add another gridline
+	// while the last vector had points inside the polygon, add another gridline
 
 	while (!output.back().empty())
 	{
@@ -550,11 +541,13 @@ void createGrid(vector<vector<TrajPt>> &output,
 		}
 	}
 
+	// if the poly is not wide enough for an offsett use initial line as traj
 	if (output.empty())
 	{
 		output.push_back(initialLine);
 	}
 
+	// remove last line if empty
 	if (output.back().empty())
 	{
 		output.pop_back();
@@ -649,7 +642,7 @@ void findPath(pcl::visualization::PCLVisualizer *viewer)
 	// add points to start and eend of line as connectPts for versitility reasons does not add the start and end pts
 	TrajPt trajPt1(selectedPoints[0], cloud->points[selectedPoints[0]], normals->points[selectedPoints[0]]);
 	initialLine.push_back(trajPt1);
-	cout << "coonnectiong initial points" << endl;
+	cout << "Connectiong initial points" << endl;
 	connectPts(initialLine, cloud2d->points[selectedPoints[0]], cloud2d->points[selectedPoints[1]]);
 
 	if (initialLine.back().index != selectedPoints[1])
@@ -661,7 +654,7 @@ void findPath(pcl::visualization::PCLVisualizer *viewer)
 
 	// create a set of lines that coves the surface
 	vector<vector<TrajPt>> vecGrid;
-	cout << "creating grid" << endl;
+	cout << "Creating grid" << endl;
 	createGrid(vecGrid, initialLine, gridNormal, gridLineDir);
 
 	// connect the lines into one Trajectory
@@ -862,7 +855,6 @@ int main(int argc, char **argv)
 {
 	if (pcl::io::loadPCDFile<pcl::PointXYZ>("input.pcd", *cloud) == -1)
 	{
-
 		PCL_ERROR("Couldn't read file input.pcd \n");
 		return (-1);
 	}

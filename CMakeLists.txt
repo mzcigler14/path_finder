@@ -9,3 +9,6 @@ add_definitions(${PCL_DEFINITIONS})
 
 add_executable(algorithm algorithm.cpp)
 target_link_libraries(algorithm ${PCL_LIBRARIES})
+
+# add_executable(createSurface createSurface.cpp)
+# target_link_libraries(createSurface ${PCL_LIBRARIES})
