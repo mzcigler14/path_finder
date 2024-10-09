@@ -428,11 +428,12 @@ void addTrajPt(int index,
 			return;
 		}
 
-		double normalZ = normals->points[nearest].normal_z;
+		// double normalZ = normals->points[nearest].normal_z;
 		// add the 3 dimensional distance to the gap
 		gap += sqrt(pow(cloud2d->points[nearest].x - prevPt.x, 2) +
-					pow(cloud2d->points[nearest].y - prevPt.y, 2)) /
-			   abs((normalZ != 0.0) ? normalZ : MAXFLOAT); // using the z of the normal project distance into 3D
+					pow(cloud2d->points[nearest].y - prevPt.y, 2) +
+					pow(cloud->points[nearest].z - cloud->points[prevNearest].z, 2));
+		// /abs((normalZ != 0.0) ? normalZ : MAXFLOAT); // using the z of the normal project distance into 3D
 
 		// if function  is used by a widening function add each point that resides in the polygon
 		if (widening && nearest != prevNearest)
@@ -746,33 +747,43 @@ void pointPickingEventOccurred(const pcl::visualization::PointPickingEvent &even
 	pcl::visualization::PCLVisualizer *viewer = static_cast<pcl::visualization::PCLVisualizer *>(viewer_void);
 	if (event.getPointIndex() == -1)
 	{
+		cout << "Point invalid, please try again" << endl;
 		return;
 	}
 	event.getPoint(x, y, z);
 
-	selectedPoints.push_back(findPointIndex(x, y, z));
-
-	pcl::PointXYZRGB selection;
-
-	selection.x = x;
-	selection.y = y;
-	selection.z = z;
-
-	selection.r = 0;
-	selection.g = 0;
-	selection.b = 255;
-
-	inputCloud->points.push_back(selection);
-
-	if (viewer->contains("Input Points"))
+	int index = findPointIndex(x, y, z);
+	if (index < 0)
 	{
-		viewer->removePointCloud("Input Points");
+		cout << "Point not on surface, please choose another point" << endl;
 	}
-	pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb_input(inputCloud);
-	viewer->addPointCloud<pcl::PointXYZRGB>(inputCloud, rgb_input, "Input Points");
-	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 7, "Input Points");
+	else
+	{
 
-	cout << "Point coordinate ( " << x << ", " << y << ", " << z << ")" << endl;
+		selectedPoints.push_back(index);
+
+		pcl::PointXYZRGB selection;
+
+		selection.x = x;
+		selection.y = y;
+		selection.z = z;
+
+		selection.r = 0;
+		selection.g = 0;
+		selection.b = 255;
+
+		inputCloud->points.push_back(selection);
+
+		if (viewer->contains("Input Points"))
+		{
+			viewer->removePointCloud("Input Points");
+		}
+		pcl::visualization::PointCloudColorHandlerRGBField<pcl::PointXYZRGB> rgb_input(inputCloud);
+		viewer->addPointCloud<pcl::PointXYZRGB>(inputCloud, rgb_input, "Input Points");
+		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 7, "Input Points");
+
+		cout << "Point coordinate ( " << x << ", " << y << ", " << z << ")" << endl;
+	}
 }
 
 /**
